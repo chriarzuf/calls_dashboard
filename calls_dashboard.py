@@ -13,7 +13,6 @@ st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 # ==========================================
 # CALENDARIO FESTIVI ITALIANI AUTOMATICO
 # ==========================================
-# Calcola automaticamente i festivi italiani per gli anni di interesse
 anni_interesse = [2024, 2025, 2026, 2027]
 festivi_it = holidays.IT(years=anni_interesse)
 festivi_italiani = list(festivi_it.keys())
@@ -178,7 +177,6 @@ if uploaded_file is not None:
     # TAB 1: OVERVIEW GLOBALE & FILTRO GIORNO
     # ---------------------------------------------------------
     with tab1:
-        # Selettore calendario per la ricerca puntuale o per periodi
         min_date = df_merged['Giorno'].min()
         max_date = df_merged['Giorno'].max()
         
@@ -267,7 +265,7 @@ if uploaded_file is not None:
     # TAB 2: MATRICE DETTAGLIO FILTRABILE & SCORECARD TURNI
     # ---------------------------------------------------------
     with tab2:
-        # Nuova scorecard predittiva per turno puro
+        # Scorecard di turno pura
         st.subheader("🎯 Scorecard di Turno (Sintesi per Fascia Oraria)")
         st.write("Questa vista isola le performance della fascia, a prescindere dall'Advisor che ha risposto. Utile per il futuro modello ad assegnazione fissa.")
         
@@ -278,9 +276,10 @@ if uploaded_file is not None:
         ).reset_index()
         scorecard['% SLA Verde'] = (scorecard['SLA_Verde'] / scorecard['Totale_Inbound'] * 100).fillna(0)
         
+        # FIX: Formattazione intera senza decimali sulla percentuale della scorecard
         st.dataframe(
             scorecard.style
-            .format({'% SLA Verde': '{:.1f}%'})
+            .format({'% SLA Verde': '{:.0f}%'})
             .background_gradient(subset=['% SLA Verde'], cmap='RdYlGn', vmin=0, vmax=100),
             use_container_width=True
         )
@@ -305,13 +304,20 @@ if uploaded_file is not None:
         ]
         
         if not df_filtrato.empty:
+            # RIPRISTINO: Torniamo alla pivot lineare classica filtrabile precedente
             pivot_adv = df_filtrato.pivot_table(
-                index='Fascia_Oraria',
-                columns='Advisor_Competente',
-                values='SLA',
-                aggfunc=lambda x: f"🟢 {sum(x=='Verde')} / 🔴 {sum(x=='Rosso')} ({(sum(x=='Verde')/len(x)*100):.1f}%)"
-            ).fillna("Nessuna Chiamata")
-            st.dataframe(pivot_adv, use_container_width=True)
+                index=['Fascia_Oraria', 'Advisor_Competente'],
+                columns='SLA',
+                aggfunc='size',
+                fill_value=0
+            ).reset_index()
+            
+            for c in ['Verde', 'Rosso']: 
+                if c not in pivot_adv.columns: pivot_adv[c] = 0
+                
+            pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Rosso']
+            pivot_adv['% SLA Verde'] = (pivot_adv['Verde'] / pivot_adv['Totale'] * 100).fillna(0)
+            st.dataframe(pivot_adv.style.format({'% SLA Verde': '{:.1f}%'}), use_container_width=True)
         else:
             st.warning("Nessun dato corrispondente ai filtri selezionati.")
 
