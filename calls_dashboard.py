@@ -14,7 +14,7 @@ st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 # CALENDARIO FESTIVI ITALIANI AUTOMATICO
 # ==========================================
 anni_interesse = [2024, 2025, 2026, 2027]
-festivi_it = holidays.IT(years=anni_interesse, prov='MI')
+festivi_it = holidays.IT(years=anni_interesse)
 festivi_italiani = list(festivi_it.keys())
 it_bday = CustomBusinessDay(holidays=festivi_italiani)
 
@@ -91,6 +91,12 @@ def load_and_process_data(file):
         direction='forward'
     )
     
+    # Rete di sicurezza per file coerenti ma privi di attivazione outbound
+    if 'datetime_risoluzione' not in merged_df.columns:
+        merged_df['datetime_risoluzione'] = pd.NaT
+    if 'advisor_risoluzione' not in merged_df.columns:
+        merged_df['advisor_resoluzione'] = 'Non Gestita'
+        
     return merged_df, ghosts_df
 
 def applica_regole_sla(row):
@@ -126,7 +132,14 @@ def applica_regole_sla(row):
 # 3. FILTRO GLOBALE E APPLICAZIONE REGOLE
 # ==========================================
 if uploaded_file is not None:
-    df_merged_raw, df_ghosts_raw = load_and_process_data(uploaded_file)
+    # --- GESTIONE ERRORI CARICAMENTO FILE ---
+    try:
+        df_merged_raw, df_ghosts_raw = load_and_process_data(uploaded_file)
+    except Exception as e:
+        st.error("❌ Errore: Il file caricato non è valido.")
+        st.info("💡 Assicurati di aver caricato l'esportazione grezza originale di Aircall. Se stai ricaricando un file già elaborato dalla dashboard, il sistema non troverà le colonne di origine necessarie al calcolo.")
+        st.stop()
+    # ----------------------------------------
     
     df_merged_raw['Giorno'] = df_merged_raw['datetime'].dt.date
     df_ghosts_raw['Giorno'] = df_ghosts_raw['datetime'].dt.date
@@ -188,7 +201,7 @@ if uploaded_file is not None:
     # ---------------------------------------------------------
     tab1, tab2, tab3 = st.tabs([
         "📈 1. Overview & Trend", 
-        "👤 2. Analisi Turni", 
+        "👤 2. Matrice Advisor", 
         "👻 3. Hub Ghost Calls"
     ])
     
@@ -216,8 +229,6 @@ if uploaded_file is not None:
                 if c not in pivot_giorno.columns: pivot_giorno[c] = 0
             pivot_giorno['Totale'] = pivot_giorno['Verde'] + pivot_giorno['Rosso']
             pivot_giorno['% Verde'] = (pivot_giorno['Verde'] / pivot_giorno['Totale']) * 100
-            
-            # Adesso il grafico prende automaticamente l'intera larghezza del layout
             st.bar_chart(pivot_giorno.set_index('Giorno')[['Verde', 'Rosso']], color=["#28a745", "#ff4b4b"])
         else:
             st.warning("Nessun dato nel periodo selezionato.")
