@@ -13,7 +13,7 @@ st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 # ==========================================
 # CALENDARIO FESTIVI ITALIANI AUTOMATICO
 # ==========================================
-anni_interesse = [2024, 2025, 2026, 2027]
+anni_interesse = [2024, 2025, 2026, 2027, 2028, 2029, 2030]
 festivi_it = holidays.IT(years=anni_interesse)
 festivi_italiani = list(festivi_it.keys())
 
