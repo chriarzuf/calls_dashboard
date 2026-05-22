@@ -7,7 +7,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v5", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v6", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
@@ -99,8 +99,10 @@ def load_and_process_data(file):
     return merged_df, ghosts_df
 
 def applica_regole_sla(row):
+    # 1. Se risposta diretta, è Verde
     if row['answered'] == 'Yes':
         return 'Verde', row['user']
+    # 2. Se persa e mai richiamata, è Rosso
     if pd.isnull(row['datetime_risoluzione']):
         return 'Rosso', 'Non Gestita'
         
@@ -112,9 +114,10 @@ def applica_regole_sla(row):
     is_business_day = not is_weekend and not is_holiday
     is_business_hours = 9 <= call_time.hour < 18
     
+    # 3. Se persa, calcoliamo i tempi per vedere se è "Recuperata" o "Rosso"
     if is_business_day and is_business_hours:
         delta_seconds = (resolve_time - call_time).total_seconds()
-        esito = 'Verde' if delta_seconds <= 3600 else 'Rosso'
+        esito = 'Recuperata' if delta_seconds <= 3600 else 'Rosso'
     else:
         if not is_business_day or call_time.hour >= 18:
             next_bday = pd.Timestamp(call_time.date()) + it_bday
@@ -122,9 +125,9 @@ def applica_regole_sla(row):
             next_bday = pd.Timestamp(call_time.date())
             
         deadline = next_bday.replace(hour=10, minute=0, second=0)
-        esito = 'Verde' if resolve_time <= deadline else 'Rosso'
+        esito = 'Recuperata' if resolve_time <= deadline else 'Rosso'
         
-    advisor_assegnato = row['advisor_risoluzione'] if esito == 'Verde' else 'In Ritardo'
+    advisor_assegnato = row['advisor_risoluzione'] if esito == 'Recuperata' else 'In Ritardo'
     return esito, advisor_assegnato
 
 # ==========================================
@@ -135,13 +138,12 @@ if uploaded_file is not None:
         df_merged_raw, df_ghosts_raw = load_and_process_data(uploaded_file)
     except Exception as e:
         st.error("❌ Errore: Il file caricato non è valido.")
-        st.info("💡 Assicurati di aver caricato l'esportazione grezza originale di Aircall. Se stai ricaricando un file già elaborato dalla dashboard, il sistema non troverà le colonne di origine necessarie al calcolo.")
+        st.info("💡 Assicurati di aver caricato l'esportazione grezza originale di Aircall.")
         st.stop()
     
     df_merged_raw['Giorno'] = df_merged_raw['datetime'].dt.date
     df_ghosts_raw['Giorno'] = df_ghosts_raw['datetime'].dt.date
     
-    # --- FILTRO GLOBALE NELLA SIDEBAR ---
     st.sidebar.divider()
     st.sidebar.subheader("📅 Filtro Temporale Globale")
     if not df_merged_raw.empty:
@@ -182,7 +184,6 @@ if uploaded_file is not None:
     
     df_fasce = df_merged[df_merged['Fascia_Oraria'] != 'nan'].copy()
 
-    # --- EXPORT DATI ---
     st.sidebar.divider()
     st.sidebar.subheader("📥 Esporta Dati Filtrati")
     csv_data = df_merged.to_csv(index=False).encode('utf-8')
@@ -193,9 +194,6 @@ if uploaded_file is not None:
         mime="text/csv",
     )
 
-    # ---------------------------------------------------------
-    # CREAZIONE DELLE PAGINE LOGICHE
-    # ---------------------------------------------------------
     tab1, tab2, tab3 = st.tabs([
         "📈 1. Overview & Trend", 
         "👤 2. Matrice Advisor", 
@@ -207,26 +205,35 @@ if uploaded_file is not None:
         st.subheader("Indicatori di Performance (Inbound Reali)")
         tot_calls = len(df_merged)
         sla_verde = len(df_merged[df_merged['SLA'] == 'Verde'])
-        tasso_sla = (sla_verde / tot_calls) * 100 if tot_calls > 0 else 0
+        sla_recuperate = len(df_merged[df_merged['SLA'] == 'Recuperata'])
+        tot_sla_ok = sla_verde + sla_recuperate
+        tasso_sla = (tot_sla_ok / tot_calls) * 100 if tot_calls > 0 else 0
         
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Totale Inbound Effettive", tot_calls)
-        col2.metric("In SLA (Verde)", sla_verde)
+        # Aggiornate le metriche per includere le recuperate
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Totale Inbound", tot_calls)
+        col2.metric("Risposte Dirette 🟢", sla_verde)
+        col3.metric("Recuperate in SLA 🔵", sla_recuperate)
+        
         if tasso_sla >= 90:
-            col3.metric("Tasso Rispetto SLA", f"{tasso_sla:.1f}%", delta="🎯 Target Raggiunto")
+            col4.metric("Tasso Globale SLA", f"{tasso_sla:.1f}%", delta="🎯 Target Raggiunto")
         else:
-            col3.metric("Tasso Rispetto SLA", f"{tasso_sla:.1f}%", delta=f"-{90-tasso_sla:.1f}% sotto target", delta_color="inverse")
+            col4.metric("Tasso Globale SLA", f"{tasso_sla:.1f}%", delta=f"-{90-tasso_sla:.1f}% sotto target", delta_color="inverse")
             
         st.divider()
         
-        st.write("**Andamento Storico Giornaliero**")
+        st.write("**Andamento Storico Giornaliero (Verde / Recuperate / Rosso)**")
         if not df_merged.empty:
             pivot_giorno = df_merged.groupby(['Giorno', 'SLA']).size().unstack(fill_value=0).reset_index()
-            for c in ['Verde', 'Rosso']: 
+            # Assicuriamoci che ci siano sempre tutte le colonne per evitare crash del grafico
+            for c in ['Verde', 'Recuperata', 'Rosso']: 
                 if c not in pivot_giorno.columns: pivot_giorno[c] = 0
-            pivot_giorno['Totale'] = pivot_giorno['Verde'] + pivot_giorno['Rosso']
-            pivot_giorno['% Verde'] = (pivot_giorno['Verde'] / pivot_giorno['Totale']) * 100
-            st.bar_chart(pivot_giorno.set_index('Giorno')[['Verde', 'Rosso']], color=["#28a745", "#ff4b4b"])
+                
+            # Grafico a barre impilato con 3 colori (Verde, Blu, Rosso)
+            st.bar_chart(
+                pivot_giorno.set_index('Giorno')[['Verde', 'Recuperata', 'Rosso']], 
+                color=["#28a745", "#17a2b8", "#ff4b4b"]
+            )
         else:
             st.warning("Nessun dato nel periodo selezionato.")
 
@@ -254,23 +261,26 @@ if uploaded_file is not None:
         else:
             st.success("Nessuno SLA Rosso rilevato nel periodo per generare la Heatmap.")
 
-    # --- TAB 2: MATRICE E SCORECARD (EVOLUTA) ---
+    # --- TAB 2: MATRICE E SCORECARD ---
     with tab2:
         st.subheader("🎯 Scorecard di Turno (Sintesi per Fascia Oraria)")
-        st.write("Valuta l'efficienza della fascia oraria indipendentemente dall'Advisor. I colori evidenziano le criticità nel periodo selezionato.")
+        st.write("Valuta l'efficienza della fascia oraria. % SLA OK somma le risposte dirette e quelle recuperate.")
         
         if not df_fasce.empty:
             scorecard = df_fasce.groupby('Fascia_Oraria').agg(
                 Totale_Inbound=('datetime', 'count'),
-                SLA_Verde=('SLA', lambda x: (x == 'Verde').sum()),
+                Dirette_Verde=('SLA', lambda x: (x == 'Verde').sum()),
+                Recuperate=('SLA', lambda x: (x == 'Recuperata').sum()),
                 SLA_Rosso=('SLA', lambda x: (x == 'Rosso').sum())
             ).reset_index()
-            scorecard['% SLA Verde'] = (scorecard['SLA_Verde'] / scorecard['Totale_Inbound'] * 100).fillna(0)
+            
+            # Il tasso di rispetto unisce Verdi e Recuperate
+            scorecard['% SLA OK'] = ((scorecard['Dirette_Verde'] + scorecard['Recuperate']) / scorecard['Totale_Inbound'] * 100).fillna(0)
             
             st.dataframe(
                 scorecard.style
-                .format({'% SLA Verde': '{:.0f}%'})
-                .background_gradient(subset=['% SLA Verde'], cmap='Reds_r', vmin=0, vmax=100),
+                .format({'% SLA OK': '{:.0f}%'})
+                .background_gradient(subset=['% SLA OK'], cmap='Reds_r', vmin=0, vmax=100),
                 use_container_width=True
             )
         else:
@@ -278,10 +288,8 @@ if uploaded_file is not None:
         
         st.divider()
 
-        # EVO: Nuova Analisi Operativa basata su Data/Ora/Advisor e tracciamento buchi di risposta
         st.subheader("👤 Analisi Operativa: Audit Copertura Turni e Buchi di Risposta")
         
-        # Etichetta dinamica per chiarire subito che giorno stiamo guardando
         if start_date == end_date:
             st.info(f"📅 **Filtro Attivo:** Stai visualizzando i dati analitici del giorno: **{start_date}**")
         else:
@@ -294,7 +302,6 @@ if uploaded_file is not None:
             filtro_fasce = st.multiselect("Seleziona Fascia Oraria:", options=elenco_fasce, default=elenco_fasce)
             
         with col_f2:
-            # Mostriamo tutti gli Advisor che hanno effettuato una qualche attività (risposta o richiamata in ritardo) o lo stato non gestito
             advisors_puliti = [str(x) for x in df_fasce['Advisor_Competente'].unique() if pd.notna(x) and str(x) != 'nan']
             elenco_advisors = sorted(advisors_puliti)
             filtro_advisors = st.multiselect("Filtra per Advisor Competente / Stato:", options=elenco_advisors, default=elenco_advisors)
@@ -305,12 +312,34 @@ if uploaded_file is not None:
         ]
         
         if not df_filtrato.empty:
-            # Creiamo la tabella "Chi ha fatto cosa e quando" ordinata per tempo reale
+            
+            # 1. RIPRISTINATA LA PIVOT TABLE
+            st.write("**📊 Sintesi Incrociata: Fascia Oraria e Advisor**")
+            pivot_adv = df_filtrato.pivot_table(
+                index=['Fascia_Oraria', 'Advisor_Competente'],
+                columns='SLA',
+                aggfunc='size',
+                fill_value=0
+            ).reset_index()
+            
+            for c in ['Verde', 'Recuperata', 'Rosso']: 
+                if c not in pivot_adv.columns: pivot_adv[c] = 0
+                
+            pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Recuperata'] + pivot_adv['Rosso']
+            pivot_adv['% SLA OK'] = ((pivot_adv['Verde'] + pivot_adv['Recuperata']) / pivot_adv['Totale'] * 100).fillna(0)
+            
+            # Riordina le colonne per logica
+            col_order = ['Fascia_Oraria', 'Advisor_Competente', 'Totale', 'Verde', 'Recuperata', 'Rosso', '% SLA OK']
+            pivot_adv = pivot_adv[[c for c in col_order if c in pivot_adv.columns]]
+            
+            st.dataframe(pivot_adv.style.format({'% SLA OK': '{:.1f}%'}), use_container_width=True)
+            
+            # 2. VISTA DI DETTAGLIO (REGISTRO)
+            st.write("**📋 Registro Dettagliato delle Interazioni (Filtri Applicati)**")
             df_audit = df_filtrato.copy()
             df_audit['Data Chiamata'] = df_audit['datetime'].dt.date
             df_audit['Orario Esatto'] = df_audit['datetime'].dt.strftime('%H:%M:%S')
             
-            # Riorganizziamo e rinominiamo le colonne per renderle aziendali ed esplicite
             tabella_operativa = df_audit[[
                 'Data Chiamata', 'Fascia_Oraria', 'Orario Esatto', 
                 'customer_number', 'SLA', 'Advisor_Competente'
@@ -321,16 +350,6 @@ if uploaded_file is not None:
                 'Advisor_Competente': 'Advisor Competente (Gestione)'
             }).sort_values(by=['Data Chiamata', 'Orario Esatto'])
             
-            # Sotto-sezione visiva dedicata esclusivamente ai Buchi di Risposta
-            st.write("**⚠️ Focus: Registro dei Buchi di Risposta (SLA Rosso o Non Gestite)**")
-            buchi_df = tabella_operativa[tabella_operativa['Esito SLA Chiamata'] == 'Rosso']
-            
-            if not buchi_df.empty:
-                st.dataframe(buchi_df, use_container_width=True)
-            else:
-                st.success("🎉 Ottimo! Nessun buco di risposta o violazione di SLA nel periodo e filtri selezionati.")
-                
-            st.write("**📋 Registro Completo delle Attività (Tutte le Chiamate del Turno)**")
             st.dataframe(tabella_operativa, use_container_width=True)
             
         else:
