@@ -126,7 +126,7 @@ def applica_regole_sla(row):
         else: 
             next_bday = pd.Timestamp(call_time.date())
             
-        deadline = next_bday.replace(hour=11, minute=0, second=0)
+        deadline = next_bday.replace(hour=10, minute=0, second=0)
         esito = 'Verde' if resolve_time <= deadline else 'Rosso'
         
     advisor_assegnato = row['advisor_risoluzione'] if esito == 'Verde' else 'In Ritardo'
