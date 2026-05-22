@@ -13,7 +13,7 @@ st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 # ==========================================
 # CALENDARIO FESTIVI ITALIANI AUTOMATICO
 # ==========================================
-anni_interesse = [2024, 2025, 2026, 2027, 2028, 2029, 2030]
+anni_interesse = [2024, 2025, 2026, 2027]
 festivi_it = holidays.IT(years=anni_interesse)
 festivi_italiani = list(festivi_it.keys())
 it_bday = CustomBusinessDay(holidays=festivi_italiani)
@@ -91,11 +91,10 @@ def load_and_process_data(file):
         direction='forward'
     )
     
-    # Rete di sicurezza per file coerenti ma privi di attivazione outbound
     if 'datetime_risoluzione' not in merged_df.columns:
         merged_df['datetime_risoluzione'] = pd.NaT
     if 'advisor_risoluzione' not in merged_df.columns:
-        merged_df['advisor_resoluzione'] = 'Non Gestita'
+        merged_df['advisor_risoluzione'] = 'Non Gestita'
         
     return merged_df, ghosts_df
 
@@ -132,14 +131,12 @@ def applica_regole_sla(row):
 # 3. FILTRO GLOBALE E APPLICAZIONE REGOLE
 # ==========================================
 if uploaded_file is not None:
-    # --- GESTIONE ERRORI CARICAMENTO FILE ---
     try:
         df_merged_raw, df_ghosts_raw = load_and_process_data(uploaded_file)
     except Exception as e:
         st.error("❌ Errore: Il file caricato non è valido.")
         st.info("💡 Assicurati di aver caricato l'esportazione grezza originale di Aircall. Se stai ricaricando un file già elaborato dalla dashboard, il sistema non troverà le colonne di origine necessarie al calcolo.")
         st.stop()
-    # ----------------------------------------
     
     df_merged_raw['Giorno'] = df_merged_raw['datetime'].dt.date
     df_ghosts_raw['Giorno'] = df_ghosts_raw['datetime'].dt.date
@@ -257,7 +254,7 @@ if uploaded_file is not None:
         else:
             st.success("Nessuno SLA Rosso rilevato nel periodo per generare la Heatmap.")
 
-    # --- TAB 2: MATRICE E SCORECARD ---
+    # --- TAB 2: MATRICE E SCORECARD (EVOLUTA) ---
     with tab2:
         st.subheader("🎯 Scorecard di Turno (Sintesi per Fascia Oraria)")
         st.write("Valuta l'efficienza della fascia oraria indipendentemente dall'Advisor. I colori evidenziano le criticità nel periodo selezionato.")
@@ -281,17 +278,26 @@ if uploaded_file is not None:
         
         st.divider()
 
-        st.subheader("👤 Analisi Operativa: Incroci Fascia e Advisor")
+        # EVO: Nuova Analisi Operativa basata su Data/Ora/Advisor e tracciamento buchi di risposta
+        st.subheader("👤 Analisi Operativa: Audit Copertura Turni e Buchi di Risposta")
+        
+        # Etichetta dinamica per chiarire subito che giorno stiamo guardando
+        if start_date == end_date:
+            st.info(f"📅 **Filtro Attivo:** Stai visualizzando i dati analitici del giorno: **{start_date}**")
+        else:
+            st.info(f"📅 **Filtro Attivo:** Stai visualizzando il periodo dal **{start_date}** al **{end_date}**")
+
         col_f1, col_f2 = st.columns(2)
         with col_f1:
             fasce_pulite = [str(x) for x in df_fasce['Fascia_Oraria'].unique() if pd.notna(x) and str(x) != 'nan']
             elenco_fasce = sorted(fasce_pulite)
-            filtro_fasce = st.multiselect("Filtra Fascia Oraria:", options=elenco_fasce, default=elenco_fasce)
+            filtro_fasce = st.multiselect("Seleziona Fascia Oraria:", options=elenco_fasce, default=elenco_fasce)
             
         with col_f2:
+            # Mostriamo tutti gli Advisor che hanno effettuato una qualche attività (risposta o richiamata in ritardo) o lo stato non gestito
             advisors_puliti = [str(x) for x in df_fasce['Advisor_Competente'].unique() if pd.notna(x) and str(x) != 'nan']
             elenco_advisors = sorted(advisors_puliti)
-            filtro_advisors = st.multiselect("Filtra Advisor / Stato Gestione:", options=elenco_advisors, default=elenco_advisors)
+            filtro_advisors = st.multiselect("Filtra per Advisor Competente / Stato:", options=elenco_advisors, default=elenco_advisors)
             
         df_filtrato = df_fasce[
             (df_fasce['Fascia_Oraria'].isin(filtro_fasce)) & 
@@ -299,19 +305,34 @@ if uploaded_file is not None:
         ]
         
         if not df_filtrato.empty:
-            pivot_adv = df_filtrato.pivot_table(
-                index=['Fascia_Oraria', 'Advisor_Competente'],
-                columns='SLA',
-                aggfunc='size',
-                fill_value=0
-            ).reset_index()
+            # Creiamo la tabella "Chi ha fatto cosa e quando" ordinata per tempo reale
+            df_audit = df_filtrato.copy()
+            df_audit['Data Chiamata'] = df_audit['datetime'].dt.date
+            df_audit['Orario Esatto'] = df_audit['datetime'].dt.strftime('%H:%M:%S')
             
-            for c in ['Verde', 'Rosso']: 
-                if c not in pivot_adv.columns: pivot_adv[c] = 0
+            # Riorganizziamo e rinominiamo le colonne per renderle aziendali ed esplicite
+            tabella_operativa = df_audit[[
+                'Data Chiamata', 'Fascia_Oraria', 'Orario Esatto', 
+                'customer_number', 'SLA', 'Advisor_Competente'
+            ]].rename(columns={
+                'Fascia_Oraria': 'Fascia Turno',
+                'customer_number': 'Numero Cliente',
+                'SLA': 'Esito SLA Chiamata',
+                'Advisor_Competente': 'Advisor Competente (Gestione)'
+            }).sort_values(by=['Data Chiamata', 'Orario Esatto'])
+            
+            # Sotto-sezione visiva dedicata esclusivamente ai Buchi di Risposta
+            st.write("**⚠️ Focus: Registro dei Buchi di Risposta (SLA Rosso o Non Gestite)**")
+            buchi_df = tabella_operativa[tabella_operativa['Esito SLA Chiamata'] == 'Rosso']
+            
+            if not buchi_df.empty:
+                st.dataframe(buchi_df, use_container_width=True)
+            else:
+                st.success("🎉 Ottimo! Nessun buco di risposta o violazione di SLA nel periodo e filtri selezionati.")
                 
-            pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Rosso']
-            pivot_adv['% SLA Verde'] = (pivot_adv['Verde'] / pivot_adv['Totale'] * 100).fillna(0)
-            st.dataframe(pivot_adv.style.format({'% SLA Verde': '{:.1f}%'}), use_container_width=True)
+            st.write("**📋 Registro Completo delle Attività (Tutte le Chiamate del Turno)**")
+            st.dataframe(tabella_operativa, use_container_width=True)
+            
         else:
             st.warning("Nessun dato corrispondente ai filtri selezionati.")
 
