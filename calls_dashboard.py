@@ -128,7 +128,6 @@ def applica_regole_sla(row):
 if uploaded_file is not None:
     df_merged_raw, df_ghosts_raw = load_and_process_data(uploaded_file)
     
-    # Creiamo subito la colonna Giorno per poter filtrare
     df_merged_raw['Giorno'] = df_merged_raw['datetime'].dt.date
     df_ghosts_raw['Giorno'] = df_ghosts_raw['datetime'].dt.date
     
@@ -151,18 +150,15 @@ if uploaded_file is not None:
     else:
         start_date, end_date = min_date, max_date
         
-    # Applichiamo il filtro ai dataframe raw
     df_merged = df_merged_raw[(df_merged_raw['Giorno'] >= start_date) & (df_merged_raw['Giorno'] <= end_date)].copy()
     df_ghosts = df_ghosts_raw[(df_ghosts_raw['Giorno'] >= start_date) & (df_ghosts_raw['Giorno'] <= end_date)].copy()
     
-    # --- CALCOLO SLA SUI DATI FILTRATI (Più Veloce!) ---
     if not df_merged.empty:
         df_merged[['SLA', 'Advisor_Competente']] = df_merged.apply(applica_regole_sla, axis=1, result_type='expand')
     else:
         df_merged['SLA'] = pd.Series(dtype='str')
         df_merged['Advisor_Competente'] = pd.Series(dtype='str')
         
-    # Preparazione feature temporali
     mappa_giorni = {'Monday':'Lunedì', 'Tuesday':'Martedì', 'Wednesday':'Mercoledì', 'Thursday':'Giovedì', 'Friday':'Venerdì', 'Saturday':'Sabato', 'Sunday':'Domenica'}
     df_merged['Giorno_Settimana'] = df_merged['datetime'].dt.day_name().map(mappa_giorni)
     
@@ -213,31 +209,18 @@ if uploaded_file is not None:
             
         st.divider()
         
-        col_grafici_1, col_grafici_2 = st.columns(2)
-        
-        with col_grafici_1:
-            st.write("**Andamento Storico Giornaliero**")
-            if not df_merged.empty:
-                pivot_giorno = df_merged.groupby(['Giorno', 'SLA']).size().unstack(fill_value=0).reset_index()
-                for c in ['Verde', 'Rosso']: 
-                    if c not in pivot_giorno.columns: pivot_giorno[c] = 0
-                pivot_giorno['Totale'] = pivot_giorno['Verde'] + pivot_giorno['Rosso']
-                pivot_giorno['% Verde'] = (pivot_giorno['Verde'] / pivot_giorno['Totale']) * 100
-                st.bar_chart(pivot_giorno.set_index('Giorno')[['Verde', 'Rosso']], color=["#28a745", "#ff4b4b"])
-            else:
-                st.warning("Nessun dato nel periodo selezionato.")
-                
-        with col_grafici_2:
-            st.write("**Distribuzione Volumi per Fascia Oraria**")
-            if not df_fasce.empty:
-                pivot_fascia = df_fasce.groupby(['Fascia_Oraria', 'SLA']).size().unstack(fill_value=0).reset_index()
-                for c in ['Verde', 'Rosso']: 
-                    if c not in pivot_fascia.columns: pivot_fascia[c] = 0
-                pivot_fascia['Totale'] = pivot_fascia['Verde'] + pivot_fascia['Rosso']
-                pivot_fascia['% Verde'] = (pivot_fascia['Verde'] / pivot_fascia['Totale'] * 100).fillna(0)
-                st.dataframe(pivot_fascia.style.format({'% Verde': '{:.1f}%'}), use_container_width=True)
-            else:
-                st.warning("Nessun dato fascia nel periodo selezionato.")
+        st.write("**Andamento Storico Giornaliero**")
+        if not df_merged.empty:
+            pivot_giorno = df_merged.groupby(['Giorno', 'SLA']).size().unstack(fill_value=0).reset_index()
+            for c in ['Verde', 'Rosso']: 
+                if c not in pivot_giorno.columns: pivot_giorno[c] = 0
+            pivot_giorno['Totale'] = pivot_giorno['Verde'] + pivot_giorno['Rosso']
+            pivot_giorno['% Verde'] = (pivot_giorno['Verde'] / pivot_giorno['Totale']) * 100
+            
+            # Adesso il grafico prende automaticamente l'intera larghezza del layout
+            st.bar_chart(pivot_giorno.set_index('Giorno')[['Verde', 'Rosso']], color=["#28a745", "#ff4b4b"])
+        else:
+            st.warning("Nessun dato nel periodo selezionato.")
 
         st.divider()
         
