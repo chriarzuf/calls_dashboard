@@ -188,7 +188,7 @@ if uploaded_file is not None:
     # ---------------------------------------------------------
     tab1, tab2, tab3 = st.tabs([
         "📈 1. Overview & Trend", 
-        "👤 2. Matrice Advisor", 
+        "👤 2. Analisi Turni", 
         "👻 3. Hub Ghost Calls"
     ])
     
