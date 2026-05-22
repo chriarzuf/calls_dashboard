@@ -7,13 +7,13 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v3", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v4", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
 # CALENDARIO FESTIVI ITALIANI AUTOMATICO
 # ==========================================
-# Calcola automaticamente i festivi italiani per gli anni di nostro interesse
+# Calcola automaticamente i festivi italiani per gli anni di interesse
 anni_interesse = [2024, 2025, 2026, 2027]
 festivi_it = holidays.IT(years=anni_interesse)
 festivi_italiani = list(festivi_it.keys())
@@ -175,12 +175,28 @@ if uploaded_file is not None:
     ])
     
     # ---------------------------------------------------------
-    # TAB 1: OVERVIEW GLOBALE & TREND
+    # TAB 1: OVERVIEW GLOBALE & FILTRO GIORNO
     # ---------------------------------------------------------
     with tab1:
-        st.subheader("Indicatori di Performance Globali (Inbound Reali)")
-        tot_calls = len(df_merged)
-        sla_verde = len(df_merged[df_merged['SLA'] == 'Verde'])
+        # Selettore calendario per la ricerca puntuale o per periodi
+        min_date = df_merged['Giorno'].min()
+        max_date = df_merged['Giorno'].max()
+        
+        col_date, _ = st.columns([1, 2])
+        with col_date:
+            date_filter = st.date_input("🔍 Cerca e Filtra per Giorno/Periodo:", [min_date, max_date], min_value=min_date, max_value=max_date)
+            
+        if len(date_filter) == 2:
+            start_date, end_date = date_filter
+            df_tab1 = df_merged[(df_merged['Giorno'] >= start_date) & (df_merged['Giorno'] <= end_date)]
+        elif len(date_filter) == 1:
+            df_tab1 = df_merged[df_merged['Giorno'] == date_filter[0]]
+        else:
+            df_tab1 = df_merged.copy()
+
+        st.subheader("Indicatori di Performance (Inbound Reali)")
+        tot_calls = len(df_tab1)
+        sla_verde = len(df_tab1[df_tab1['SLA'] == 'Verde'])
         tasso_sla = (sla_verde / tot_calls) * 100 if tot_calls > 0 else 0
         
         col1, col2, col3 = st.columns(3)
@@ -196,30 +212,37 @@ if uploaded_file is not None:
         col_grafici_1, col_grafici_2 = st.columns(2)
         
         with col_grafici_1:
-            st.write("**Andamento Storico Giornaliero**")
-            pivot_giorno = df_merged.groupby(['Giorno', 'SLA']).size().unstack(fill_value=0).reset_index()
-            for c in ['Verde', 'Rosso']: 
-                if c not in pivot_giorno.columns: pivot_giorno[c] = 0
-            pivot_giorno['Totale'] = pivot_giorno['Verde'] + pivot_giorno['Rosso']
-            pivot_giorno['% Verde'] = (pivot_giorno['Verde'] / pivot_giorno['Totale']) * 100
-            
-            st.bar_chart(pivot_giorno.set_index('Giorno')[['Verde', 'Rosso']], color=["#28a745", "#ff4b4b"])
-            
+            st.write("**Andamento Storico Giornaliero (Periodo Selezionato)**")
+            if not df_tab1.empty:
+                pivot_giorno = df_tab1.groupby(['Giorno', 'SLA']).size().unstack(fill_value=0).reset_index()
+                for c in ['Verde', 'Rosso']: 
+                    if c not in pivot_giorno.columns: pivot_giorno[c] = 0
+                pivot_giorno['Totale'] = pivot_giorno['Verde'] + pivot_giorno['Rosso']
+                pivot_giorno['% Verde'] = (pivot_giorno['Verde'] / pivot_giorno['Totale']) * 100
+                
+                st.bar_chart(pivot_giorno.set_index('Giorno')[['Verde', 'Rosso']], color=["#28a745", "#ff4b4b"])
+            else:
+                st.warning("Nessun dato nel periodo selezionato.")
+                
         with col_grafici_2:
             st.write("**Distribuzione Volumi per Fascia Oraria**")
-            pivot_fascia = df_fasce.groupby(['Fascia_Oraria', 'SLA']).size().unstack(fill_value=0).reset_index()
-            for c in ['Verde', 'Rosso']: 
-                if c not in pivot_fascia.columns: pivot_fascia[c] = 0
-            pivot_fascia['Totale'] = pivot_fascia['Verde'] + pivot_fascia['Rosso']
-            pivot_fascia['% Verde'] = (pivot_fascia['Verde'] / pivot_fascia['Totale'] * 100).fillna(0)
-            
-            st.dataframe(pivot_fascia.style.format({'% Verde': '{:.1f}%'}), use_container_width=True)
+            df_fasce_tab1 = df_tab1[df_tab1['Fascia_Oraria'] != 'nan']
+            if not df_fasce_tab1.empty:
+                pivot_fascia = df_fasce_tab1.groupby(['Fascia_Oraria', 'SLA']).size().unstack(fill_value=0).reset_index()
+                for c in ['Verde', 'Rosso']: 
+                    if c not in pivot_fascia.columns: pivot_fascia[c] = 0
+                pivot_fascia['Totale'] = pivot_fascia['Verde'] + pivot_fascia['Rosso']
+                pivot_fascia['% Verde'] = (pivot_fascia['Verde'] / pivot_fascia['Totale'] * 100).fillna(0)
+                
+                st.dataframe(pivot_fascia.style.format({'% Verde': '{:.1f}%'}), use_container_width=True)
+            else:
+                st.warning("Nessun dato fascia nel periodo selezionato.")
 
         st.divider()
         
         # --- HEATMAP CHIAMATE PERSE ---
         st.write("**🔴 Heatmap Inefficienze: Concentrazione Chiamate SLA Rosso**")
-        df_rossi = df_fasce[df_fasce['SLA'] == 'Rosso']
+        df_rossi = df_tab1[(df_tab1['Fascia_Oraria'] != 'nan') & (df_tab1['SLA'] == 'Rosso')]
         
         if not df_rossi.empty:
             heatmap_data = df_rossi.pivot_table(
@@ -228,11 +251,9 @@ if uploaded_file is not None:
                 aggfunc='size', 
                 fill_value=0
             )
-            # Riordina i giorni della settimana logicamente
             ordine_giorni = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
             heatmap_data = heatmap_data.reindex(ordine_giorni).dropna(how='all')
             
-            # Applica gradiente rosso per evidenziare i punti critici formattando come numero intero
             st.dataframe(
                 heatmap_data.style
                 .format("{:.0f}")
@@ -240,14 +261,33 @@ if uploaded_file is not None:
                 use_container_width=True
             )
         else:
-            st.success("Nessuno SLA Rosso rilevato per generare la Heatmap.")
+            st.success("Nessuno SLA Rosso rilevato nel periodo per generare la Heatmap.")
 
     # ---------------------------------------------------------
-    # TAB 2: MATRICE DETTAGLIO FILTRABILE
+    # TAB 2: MATRICE DETTAGLIO FILTRABILE & SCORECARD TURNI
     # ---------------------------------------------------------
     with tab2:
-        st.subheader("Matrice Operativa: Fascia Oraria e Advisor Competente")
+        # Nuova scorecard predittiva per turno puro
+        st.subheader("🎯 Scorecard di Turno (Sintesi per Fascia Oraria)")
+        st.write("Questa vista isola le performance della fascia, a prescindere dall'Advisor che ha risposto. Utile per il futuro modello ad assegnazione fissa.")
         
+        scorecard = df_fasce.groupby('Fascia_Oraria').agg(
+            Totale_Inbound=('datetime', 'count'),
+            SLA_Verde=('SLA', lambda x: (x == 'Verde').sum()),
+            SLA_Rosso=('SLA', lambda x: (x == 'Rosso').sum())
+        ).reset_index()
+        scorecard['% SLA Verde'] = (scorecard['SLA_Verde'] / scorecard['Totale_Inbound'] * 100).fillna(0)
+        
+        st.dataframe(
+            scorecard.style
+            .format({'% SLA Verde': '{:.1f}%'})
+            .background_gradient(subset=['% SLA Verde'], cmap='RdYlGn', vmin=0, vmax=100),
+            use_container_width=True
+        )
+        
+        st.divider()
+
+        st.subheader("👤 Analisi Operativa: Incroci Fascia e Advisor")
         col_f1, col_f2 = st.columns(2)
         with col_f1:
             fasce_pulite = [str(x) for x in df_fasce['Fascia_Oraria'].unique() if pd.notna(x) and str(x) != 'nan']
@@ -266,18 +306,12 @@ if uploaded_file is not None:
         
         if not df_filtrato.empty:
             pivot_adv = df_filtrato.pivot_table(
-                index=['Fascia_Oraria', 'Advisor_Competente'],
-                columns='SLA',
-                aggfunc='size',
-                fill_value=0
-            ).reset_index()
-            
-            for c in ['Verde', 'Rosso']: 
-                if c not in pivot_adv.columns: pivot_adv[c] = 0
-                
-            pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Rosso']
-            pivot_adv['% SLA Verde'] = (pivot_adv['Verde'] / pivot_adv['Totale'] * 100).fillna(0)
-            st.dataframe(pivot_adv.style.format({'% SLA Verde': '{:.1f}%'}), use_container_width=True)
+                index='Fascia_Oraria',
+                columns='Advisor_Competente',
+                values='SLA',
+                aggfunc=lambda x: f"🟢 {sum(x=='Verde')} / 🔴 {sum(x=='Rosso')} ({(sum(x=='Verde')/len(x)*100):.1f}%)"
+            ).fillna("Nessuna Chiamata")
+            st.dataframe(pivot_adv, use_container_width=True)
         else:
             st.warning("Nessun dato corrispondente ai filtri selezionati.")
 
