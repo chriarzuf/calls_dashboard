@@ -13,7 +13,8 @@ st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 # ==========================================
 # CALENDARIO FESTIVI ITALIANI AUTOMATICO
 # ==========================================
-anni_interesse = [2024, 2025, 2026, 2027, 2028, 2029, 2030]
+# Calcola automaticamente i festivi italiani per gli anni di interesse
+anni_interesse = [2024, 2025, 2026, 2027]
 festivi_it = holidays.IT(years=anni_interesse)
 festivi_italiani = list(festivi_it.keys())
 
@@ -265,9 +266,8 @@ if uploaded_file is not None:
     # TAB 2: MATRICE DETTAGLIO FILTRABILE & SCORECARD TURNI
     # ---------------------------------------------------------
     with tab2:
-        # Scorecard di turno pura
         st.subheader("🎯 Scorecard di Turno (Sintesi per Fascia Oraria)")
-        st.write("Questa vista isola le performance della fascia, a prescindere dall'Advisor che ha risposto. Utile per il futuro modello ad assegnazione fissa.")
+        st.write("Questa vista isola le performance della fascia, a prescindere dall'Advisor che ha risposto.")
         
         scorecard = df_fasce.groupby('Fascia_Oraria').agg(
             Totale_Inbound=('datetime', 'count'),
@@ -276,11 +276,11 @@ if uploaded_file is not None:
         ).reset_index()
         scorecard['% SLA Verde'] = (scorecard['SLA_Verde'] / scorecard['Totale_Inbound'] * 100).fillna(0)
         
-        # FIX: Formattazione intera senza decimali sulla percentuale della scorecard
+        # FIX ALLINEAMENTO VISIVO: Usiamo Reds_r (Rosso invertito) così percentuali basse = rosso forte, 100% = bianco
         st.dataframe(
             scorecard.style
             .format({'% SLA Verde': '{:.0f}%'})
-            .background_gradient(subset=['% SLA Verde'], cmap='RdYlGn', vmin=0, vmax=100),
+            .background_gradient(subset=['% SLA Verde'], cmap='Reds_r', vmin=0, vmax=100),
             use_container_width=True
         )
         
@@ -304,7 +304,6 @@ if uploaded_file is not None:
         ]
         
         if not df_filtrato.empty:
-            # RIPRISTINO: Torniamo alla pivot lineare classica filtrabile precedente
             pivot_adv = df_filtrato.pivot_table(
                 index=['Fascia_Oraria', 'Advisor_Competente'],
                 columns='SLA',
