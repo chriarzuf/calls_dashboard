@@ -7,7 +7,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v6.5", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v6.6", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
@@ -58,39 +58,20 @@ except ValueError:
 # ==========================================
 @st.cache_data
 def load_and_process_data(file):
-    df = pd.read_csv(file, sep=None, engine='python')
+    # FIX: Leggiamo tutto il CSV come TESTO PURO fin dal principio (dtype=str)
+    # Nessun numero verrà mai più convertito in decimale o notazione scientifica
+    df = pd.read_csv(file, sep=None, engine='python', dtype=str)
     df.columns = df.columns.str.strip()
     
-    # Date italiane
+    # Ora convertiamo esplicitamente solo ciò che deve essere una data o un tempo
     df['datetime'] = pd.to_datetime(df['datetime (tz offset incl.)'], dayfirst=True)
-    
-    # ----------------------------------------------------
-    # FIX: PREVENZIONE NOTAZIONE SCIENTIFICA NUMERI CLIENTI
-    # ----------------------------------------------------
-    def formatta_numero(val):
-        if pd.isna(val): return "Sconosciuto"
-        v = str(val).strip()
-        if v.lower() == 'nan' or v == '': return "Sconosciuto"
-        
-        # Mantiene il "+" per i prefissi internazionali
-        has_plus = v.startswith('+')
-        
-        try:
-            # Se Pandas l'ha letto in notazione scientifica (es. 3.93e+09) o con decimale
-            if 'e' in v.lower() or v.endswith('.0'):
-                num_pulito = f"{float(v):.0f}"
-                v = f"+{num_pulito}" if has_plus else num_pulito
-        except:
-            pass
-            
-        # Aggiungiamo un'icona per forzare Streamlit a non fare conversioni matematiche a schermo
-        return f"📞 {v}"
-
-    df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'], df['to'])
-    df['customer_number'] = df['customer_number'].apply(formatta_numero)
-    # ----------------------------------------------------
-
     df['waiting_seconds'] = pd.to_timedelta(df['waiting time']).dt.total_seconds().fillna(0)
+    
+    # Assegnazione pulita del customer_number (rimane puro testo)
+    df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'], df['to'])
+    
+    # Pulizia di sicurezza per valori nulli
+    df['customer_number'] = df['customer_number'].replace([np.nan, 'nan', ''], 'Sconosciuto').fillna('Sconosciuto')
     
     is_ghost = (df['direction'] == 'inbound') & (df['answered'] == 'No') & (
         (df['waiting_seconds'] <= 5) | (df['missed_call_reason'] == 'short_abandoned')
