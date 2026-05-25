@@ -7,7 +7,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v6.2", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v6.4", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
@@ -61,8 +61,18 @@ def load_and_process_data(file):
     df = pd.read_csv(file, sep=None, engine='python')
     df.columns = df.columns.str.strip()
     
+    # ----------------------------------------------------
+    # FIX DATE ITALIANE
+    # ----------------------------------------------------
     df['datetime'] = pd.to_datetime(df['datetime (tz offset incl.)'], dayfirst=True)
-    df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'], df['to'])
+    
+    # ----------------------------------------------------
+    # FIX NUMERI CLIENTI (Forziamo come testo puro per evitare notazione scientifica)
+    # ----------------------------------------------------
+    df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'].astype(str), df['to'].astype(str))
+    # Rimuoviamo il ".0" se Pandas li aveva convertiti in float, e sostituiamo i vuoti
+    df['customer_number'] = df['customer_number'].str.replace(r'\.0$', '', regex=True).replace('nan', 'Sconosciuto')
+    
     df['waiting_seconds'] = pd.to_timedelta(df['waiting time']).dt.total_seconds().fillna(0)
     
     is_ghost = (df['direction'] == 'inbound') & (df['answered'] == 'No') & (
@@ -152,7 +162,6 @@ if uploaded_file is not None:
 
     date_filter = st.sidebar.date_input("Seleziona periodo:", [min_date, max_date], min_value=min_date, max_value=max_date)
     
-    # QUI HO RIPRISTINATO IL BLOCCO CORRETTO PER EVITARE IL TUO "NameError"
     if len(date_filter) == 2:
         start_date, end_date = date_filter
     elif len(date_filter) == 1:
@@ -287,7 +296,6 @@ if uploaded_file is not None:
 
         st.subheader("👤 Analisi Operativa: Audit Copertura Turni e Buchi di Risposta")
         
-        # FORMATTAZIONE DATA ALL'ITALIANA PER IL BANNER
         data_inizio_it = start_date.strftime('%d/%m/%Y')
         data_fine_it = end_date.strftime('%d/%m/%Y')
         
@@ -339,7 +347,6 @@ if uploaded_file is not None:
             
             st.write("**📋 Registro Dettagliato delle Interazioni (Filtri Applicati)**")
             df_audit = df_filtrato.copy()
-            # FORMATTAZIONE DATA ALL'ITALIANA PER IL REGISTRO DETTAGLIATO
             df_audit['Data Chiamata'] = pd.to_datetime(df_audit['datetime']).dt.strftime('%d/%m/%Y')
             df_audit['Orario Esatto'] = df_audit['datetime'].dt.strftime('%H:%M:%S')
             
@@ -371,7 +378,6 @@ if uploaded_file is not None:
         
         if tot_ghosts > 0:
             df_ghosts['Ora'] = df_ghosts['datetime'].dt.hour
-            # FORMATTAZIONE DATA ALL'ITALIANA PER LE GHOST CALLS
             df_ghosts['Giorno_F'] = pd.to_datetime(df_ghosts['datetime']).dt.strftime('%d/%m/%Y')
             
             col_ch1, col_ch2 = st.columns(2)
