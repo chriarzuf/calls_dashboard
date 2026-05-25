@@ -99,10 +99,8 @@ def load_and_process_data(file):
     return merged_df, ghosts_df
 
 def applica_regole_sla(row):
-    # 1. Se risposta diretta, è Verde
     if row['answered'] == 'Yes':
         return 'Verde', row['user']
-    # 2. Se persa e mai richiamata, è Rosso
     if pd.isnull(row['datetime_risoluzione']):
         return 'Rosso', 'Non Gestita'
         
@@ -114,7 +112,6 @@ def applica_regole_sla(row):
     is_business_day = not is_weekend and not is_holiday
     is_business_hours = 9 <= call_time.hour < 18
     
-    # 3. Se persa, calcoliamo i tempi per vedere se è "Recuperata" o "Rosso"
     if is_business_day and is_business_hours:
         delta_seconds = (resolve_time - call_time).total_seconds()
         esito = 'Recuperata' if delta_seconds <= 3600 else 'Rosso'
@@ -209,7 +206,6 @@ if uploaded_file is not None:
         tot_sla_ok = sla_verde + sla_recuperate
         tasso_sla = (tot_sla_ok / tot_calls) * 100 if tot_calls > 0 else 0
         
-        # Aggiornate le metriche per includere le recuperate
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Totale Inbound", tot_calls)
         col2.metric("Risposte Dirette 🟢", sla_verde)
@@ -225,11 +221,9 @@ if uploaded_file is not None:
         st.write("**Andamento Storico Giornaliero (Verde / Recuperate / Rosso)**")
         if not df_merged.empty:
             pivot_giorno = df_merged.groupby(['Giorno', 'SLA']).size().unstack(fill_value=0).reset_index()
-            # Assicuriamoci che ci siano sempre tutte le colonne per evitare crash del grafico
             for c in ['Verde', 'Recuperata', 'Rosso']: 
                 if c not in pivot_giorno.columns: pivot_giorno[c] = 0
                 
-            # Grafico a barre impilato con 3 colori (Verde, Blu, Rosso)
             st.bar_chart(
                 pivot_giorno.set_index('Giorno')[['Verde', 'Recuperata', 'Rosso']], 
                 color=["#28a745", "#17a2b8", "#ff4b4b"]
@@ -244,13 +238,14 @@ if uploaded_file is not None:
         
         if not df_rossi.empty:
             heatmap_data = df_rossi.pivot_table(
-                index='Giorno_Settimana', 
-                columns='Fascia_Oraria', 
+                index='Fascia_Oraria',       # ORA LE RIGHE SONO LE FASCE ORARIE
+                columns='Giorno_Settimana',  # ORA LE COLONNE SONO I GIORNI
                 aggfunc='size', 
                 fill_value=0
             )
             ordine_giorni = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
-            heatmap_data = heatmap_data.reindex(ordine_giorni).dropna(how='all')
+            # Riordiniamo la visualizzazione specificando che stiamo operando sulle colonne (axis=1)
+            heatmap_data = heatmap_data.reindex(columns=ordine_giorni).dropna(how='all', axis=1)
             
             st.dataframe(
                 heatmap_data.style
@@ -274,7 +269,6 @@ if uploaded_file is not None:
                 SLA_Rosso=('SLA', lambda x: (x == 'Rosso').sum())
             ).reset_index()
             
-            # Il tasso di rispetto unisce Verdi e Recuperate
             scorecard['% SLA OK'] = ((scorecard['Dirette_Verde'] + scorecard['Recuperate']) / scorecard['Totale_Inbound'] * 100).fillna(0)
             
             st.dataframe(
@@ -313,7 +307,6 @@ if uploaded_file is not None:
         
         if not df_filtrato.empty:
             
-            # 1. RIPRISTINATA LA PIVOT TABLE
             st.write("**📊 Sintesi Incrociata: Fascia Oraria e Advisor**")
             pivot_adv = df_filtrato.pivot_table(
                 index=['Fascia_Oraria', 'Advisor_Competente'],
@@ -328,13 +321,11 @@ if uploaded_file is not None:
             pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Recuperata'] + pivot_adv['Rosso']
             pivot_adv['% SLA OK'] = ((pivot_adv['Verde'] + pivot_adv['Recuperata']) / pivot_adv['Totale'] * 100).fillna(0)
             
-            # Riordina le colonne per logica
             col_order = ['Fascia_Oraria', 'Advisor_Competente', 'Totale', 'Verde', 'Recuperata', 'Rosso', '% SLA OK']
             pivot_adv = pivot_adv[[c for c in col_order if c in pivot_adv.columns]]
             
             st.dataframe(pivot_adv.style.format({'% SLA OK': '{:.1f}%'}), use_container_width=True)
             
-            # 2. VISTA DI DETTAGLIO (REGISTRO)
             st.write("**📋 Registro Dettagliato delle Interazioni (Filtri Applicati)**")
             df_audit = df_filtrato.copy()
             df_audit['Data Chiamata'] = df_audit['datetime'].dt.date
