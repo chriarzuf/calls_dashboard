@@ -7,7 +7,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v6.7", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v6.8", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
@@ -336,15 +336,13 @@ if uploaded_file is not None:
                 
             pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Recuperata'] + pivot_adv['Rosso']
             
-            p_verde = pivot_adv['Verde'].astype(float)
-            p_recup = pivot_adv['Recuperata'].astype(float)
-            p_totale = pivot_adv['Totale'].astype(float)
-            pivot_adv['% SLA OK'] = ((p_verde + p_recup) / p_totale.replace(0, np.nan) * 100).fillna(0)
+            # Rimosso il calcolo di % SLA OK
             
-            col_order = ['Fascia_Oraria', 'Advisor_Competente', 'Totale', 'Verde', 'Recuperata', 'Rosso', '% SLA OK']
+            col_order = ['Fascia_Oraria', 'Advisor_Competente', 'Totale', 'Verde', 'Recuperata', 'Rosso']
             pivot_adv = pivot_adv[[c for c in col_order if c in pivot_adv.columns]]
             
-            st.dataframe(pivot_adv.style.format({'% SLA OK': '{:.1f}%'}), use_container_width=True)
+            # Visualizzazione standard senza la formattazione percentuale
+            st.dataframe(pivot_adv, use_container_width=True)
             
             st.write("**📋 Registro Dettagliato delle Interazioni (Filtri Applicati)**")
             df_audit = df_filtrato.copy()
