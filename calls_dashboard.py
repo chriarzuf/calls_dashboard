@@ -7,7 +7,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v6.6", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v6.7", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
@@ -58,19 +58,22 @@ except ValueError:
 # ==========================================
 @st.cache_data
 def load_and_process_data(file):
-    # FIX: Leggiamo tutto il CSV come TESTO PURO fin dal principio (dtype=str)
-    # Nessun numero verrà mai più convertito in decimale o notazione scientifica
     df = pd.read_csv(file, sep=None, engine='python', dtype=str)
     df.columns = df.columns.str.strip()
     
-    # Ora convertiamo esplicitamente solo ciò che deve essere una data o un tempo
     df['datetime'] = pd.to_datetime(df['datetime (tz offset incl.)'], dayfirst=True)
     df['waiting_seconds'] = pd.to_timedelta(df['waiting time']).dt.total_seconds().fillna(0)
     
-    # Assegnazione pulita del customer_number (rimane puro testo)
-    df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'], df['to'])
-    
-    # Pulizia di sicurezza per valori nulli
+    # -------------------------------------------------------------------------
+    # FIX NUMERI DI TELEFONO: Usiamo la colonna nativa testuale "customer number"
+    # per aggirare il problema di Excel che converte "from" e "to" in esponenziali
+    # -------------------------------------------------------------------------
+    if 'customer number' in df.columns:
+        df['customer_number'] = df['customer number']
+    else:
+        # Fallback di emergenza
+        df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'], df['to'])
+        
     df['customer_number'] = df['customer_number'].replace([np.nan, 'nan', ''], 'Sconosciuto').fillna('Sconosciuto')
     
     is_ghost = (df['direction'] == 'inbound') & (df['answered'] == 'No') & (
