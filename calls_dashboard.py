@@ -61,7 +61,7 @@ def load_and_process_data(file):
     df = pd.read_csv(file, sep=None, engine='python')
     df.columns = df.columns.str.strip()
     
-    df['datetime'] = pd.to_datetime(df['datetime (tz offset incl.)'])
+    df['datetime'] = pd.to_datetime(df['datetime (tz offset incl.)'], dayfirst=True)
     df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'], df['to'])
     df['waiting_seconds'] = pd.to_timedelta(df['waiting time']).dt.total_seconds().fillna(0)
     
