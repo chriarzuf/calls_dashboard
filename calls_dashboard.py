@@ -33,7 +33,7 @@ def format_float_to_time(time_float):
     m = int(round((time_float - h) * 60))
     return f"{h:02d}:{m:02d}"
 
-# --- NUOVA LOGICA: CALCOLO SCADENZA (CONGELAMENTO TIMER) ---
+# --- CALCOLO SCADENZA (CONGELAMENTO TIMER) ---
 def calculate_deadline(call_time):
     is_weekend = call_time.weekday() >= 5
     is_holiday = call_time.date() in festivi_italiani
