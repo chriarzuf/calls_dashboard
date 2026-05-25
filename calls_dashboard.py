@@ -7,7 +7,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v6.1", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v6.2", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
@@ -61,7 +61,9 @@ def load_and_process_data(file):
     df = pd.read_csv(file, sep=None, engine='python')
     df.columns = df.columns.str.strip()
     
-    df['datetime'] = pd.to_datetime(df['datetime (tz offset incl.)'])
+    # FIX DATE: dayfirst=True forza la lettura europea (GG/MM/AAAA)
+    df['datetime'] = pd.to_datetime(df['datetime (tz offset incl.)'], dayfirst=True)
+    
     df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'], df['to'])
     df['waiting_seconds'] = pd.to_timedelta(df['waiting time']).dt.total_seconds().fillna(0)
     
@@ -150,249 +152,14 @@ if uploaded_file is not None:
         min_date = pd.Timestamp.today().date()
         max_date = min_date
 
-    date_filter = st.sidebar.date_input("Seleziona periodo:", [min_date, max_date], min_value=min_date, max_value=max_date)
+    # FIX DATE: Aggiunto format="DD/MM/YYYY" per forzare la visualizzazione europea
+    date_filter = st.sidebar.date_input(
+        "Seleziona periodo:", 
+        [min_date, max_date], 
+        min_value=min_date, 
+        max_value=max_date,
+        format="DD/MM/YYYY"
+    )
     
     if len(date_filter) == 2:
-        start_date, end_date = date_filter
-    elif len(date_filter) == 1:
-        start_date = end_date = date_filter[0]
-    else:
-        start_date, end_date = min_date, max_date
-        
-    df_merged = df_merged_raw[(df_merged_raw['Giorno'] >= start_date) & (df_merged_raw['Giorno'] <= end_date)].copy()
-    df_ghosts = df_ghosts_raw[(df_ghosts_raw['Giorno'] >= start_date) & (df_ghosts_raw['Giorno'] <= end_date)].copy()
-    
-    if not df_merged.empty:
-        df_merged[['SLA', 'Advisor_Competente']] = df_merged.apply(applica_regole_sla, axis=1, result_type='expand')
-    else:
-        df_merged['SLA'] = pd.Series(dtype='str')
-        df_merged['Advisor_Competente'] = pd.Series(dtype='str')
-        
-    mappa_giorni = {'Monday':'Lunedì', 'Tuesday':'Martedì', 'Wednesday':'Mercoledì', 'Thursday':'Giovedì', 'Friday':'Venerdì', 'Saturday':'Sabato', 'Sunday':'Domenica'}
-    df_merged['Giorno_Settimana'] = df_merged['datetime'].dt.day_name().map(mappa_giorni)
-    
-    df_merged['hour_float'] = df_merged['datetime'].dt.hour + (df_merged['datetime'].dt.minute / 60.0)
-    df_merged['Fascia_Oraria'] = pd.cut(
-        df_merged['hour_float'], 
-        bins=orari_fasce_float, 
-        labels=etichette_fasce,
-        right=False
-    ).astype(str)
-    
-    df_fasce = df_merged[df_merged['Fascia_Oraria'] != 'nan'].copy()
-
-    st.sidebar.divider()
-    st.sidebar.subheader("📥 Esporta Dati Filtrati")
-    csv_data = df_merged.to_csv(index=False).encode('utf-8')
-    st.sidebar.download_button(
-        label="Scarica Dataset (CSV)",
-        data=csv_data,
-        file_name="aircall_sla_elaborati_filtrati.csv",
-        mime="text/csv",
-    )
-
-    tab1, tab2, tab3 = st.tabs([
-        "📈 1. Overview & Trend", 
-        "👤 2. Matrice Advisor", 
-        "👻 3. Hub Ghost Calls"
-    ])
-    
-    # --- TAB 1: OVERVIEW GLOBALE ---
-    with tab1:
-        st.subheader("Indicatori di Performance (Inbound Reali)")
-        tot_calls = len(df_merged)
-        sla_verde = len(df_merged[df_merged['SLA'] == 'Verde'])
-        sla_recuperate = len(df_merged[df_merged['SLA'] == 'Recuperata'])
-        tot_sla_ok = sla_verde + sla_recuperate
-        tasso_sla = (tot_sla_ok / tot_calls) * 100 if tot_calls > 0 else 0
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Totale Inbound", tot_calls)
-        col2.metric("Risposte Dirette 🟢", sla_verde)
-        col3.metric("Recuperate in SLA 🔵", sla_recuperate)
-        
-        if tasso_sla >= 90:
-            col4.metric("Tasso Globale SLA", f"{tasso_sla:.1f}%", delta="🎯 Target Raggiunto")
-        else:
-            col4.metric("Tasso Globale SLA", f"{tasso_sla:.1f}%", delta=f"-{90-tasso_sla:.1f}% sotto target", delta_color="inverse")
-            
-        st.divider()
-        
-        st.write("**Andamento Storico Giornaliero (Verde / Recuperate / Rosso)**")
-        if not df_merged.empty:
-            pivot_giorno = df_merged.groupby(['Giorno', 'SLA']).size().unstack(fill_value=0).reset_index()
-            for c in ['Verde', 'Recuperata', 'Rosso']: 
-                if c not in pivot_giorno.columns: pivot_giorno[c] = 0
-                
-            st.bar_chart(
-                pivot_giorno.set_index('Giorno')[['Verde', 'Recuperata', 'Rosso']], 
-                color=["#28a745", "#17a2b8", "#ff4b4b"]
-            )
-        else:
-            st.warning("Nessun dato nel periodo selezionato.")
-
-        st.divider()
-        
-        st.write("**🔴 Heatmap Inefficienze: Concentrazione Chiamate SLA Rosso**")
-        df_rossi = df_fasce[df_fasce['SLA'] == 'Rosso']
-        
-        if not df_rossi.empty:
-            heatmap_data = df_rossi.pivot_table(
-                index='Fascia_Oraria',       
-                columns='Giorno_Settimana',  
-                aggfunc='size', 
-                fill_value=0
-            )
-            ordine_giorni = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
-            heatmap_data = heatmap_data.reindex(columns=ordine_giorni).dropna(how='all', axis=1)
-            
-            st.dataframe(
-                heatmap_data.style
-                .format("{:.0f}")
-                .background_gradient(cmap='Reds', axis=None), 
-                use_container_width=True
-            )
-        else:
-            st.success("Nessuno SLA Rosso rilevato nel periodo per generare la Heatmap.")
-
-    # --- TAB 2: MATRICE E SCORECARD ---
-    with tab2:
-        st.subheader("🎯 Scorecard di Turno (Sintesi per Fascia Oraria)")
-        st.write("Valuta l'efficienza della fascia oraria. % SLA OK somma le risposte dirette e quelle recuperate.")
-        
-        if not df_fasce.empty:
-            scorecard = df_fasce.groupby('Fascia_Oraria').agg(
-                Totale_Inbound=('datetime', 'count'),
-                Dirette_Verde=('SLA', lambda x: (x == 'Verde').sum()),
-                Recuperate=('SLA', lambda x: (x == 'Recuperata').sum()),
-                SLA_Rosso=('SLA', lambda x: (x == 'Rosso').sum())
-            ).reset_index()
-            
-            # PROTEZIONE PyArrow per il calcolo della Scorecard
-            verde = scorecard['Dirette_Verde'].astype(float)
-            recup = scorecard['Recuperate'].astype(float)
-            totale = scorecard['Totale_Inbound'].astype(float)
-            scorecard['% SLA OK'] = ((verde + recup) / totale.replace(0, np.nan) * 100).fillna(0)
-            
-            st.dataframe(
-                scorecard.style
-                .format({'% SLA OK': '{:.0f}%'})
-                .background_gradient(subset=['% SLA OK'], cmap='Reds_r', vmin=0, vmax=100),
-                use_container_width=True
-            )
-        else:
-            st.warning("Nessun dato disponibile per calcolare la scorecard nel periodo.")
-        
-        st.divider()
-
-        st.subheader("👤 Analisi Operativa: Audit Copertura Turni e Buchi di Risposta")
-        
-        if start_date == end_date:
-            st.info(f"📅 **Filtro Attivo:** Stai visualizzando i dati analitici del giorno: **{start_date}**")
-        else:
-            st.info(f"📅 **Filtro Attivo:** Stai visualizzando il periodo dal **{start_date}** al **{end_date}**")
-
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            fasce_pulite = [str(x) for x in df_fasce['Fascia_Oraria'].unique() if pd.notna(x) and str(x) != 'nan']
-            elenco_fasce = sorted(fasce_pulite)
-            filtro_fasce = st.multiselect("Seleziona Fascia Oraria:", options=elenco_fasce, default=elenco_fasce)
-            
-        with col_f2:
-            advisors_puliti = [str(x) for x in df_fasce['Advisor_Competente'].unique() if pd.notna(x) and str(x) != 'nan']
-            elenco_advisors = sorted(advisors_puliti)
-            filtro_advisors = st.multiselect("Filtra per Advisor Competente / Stato:", options=elenco_advisors, default=elenco_advisors)
-            
-        df_filtrato = df_fasce[
-            (df_fasce['Fascia_Oraria'].isin(filtro_fasce)) & 
-            (df_fasce['Advisor_Competente'].isin(filtro_advisors))
-        ]
-        
-        if not df_filtrato.empty:
-            
-            st.write("**📊 Sintesi Incrociata: Fascia Oraria e Advisor**")
-            pivot_adv = df_filtrato.pivot_table(
-                index=['Fascia_Oraria', 'Advisor_Competente'],
-                columns='SLA',
-                aggfunc='size',
-                fill_value=0
-            ).reset_index()
-            
-            for c in ['Verde', 'Recuperata', 'Rosso']: 
-                if c not in pivot_adv.columns: pivot_adv[c] = 0
-                
-            pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Recuperata'] + pivot_adv['Rosso']
-            
-            # PROTEZIONE PyArrow per il calcolo della Pivot Advisor
-            p_verde = pivot_adv['Verde'].astype(float)
-            p_recup = pivot_adv['Recuperata'].astype(float)
-            p_totale = pivot_adv['Totale'].astype(float)
-            pivot_adv['% SLA OK'] = ((p_verde + p_recup) / p_totale.replace(0, np.nan) * 100).fillna(0)
-            
-            col_order = ['Fascia_Oraria', 'Advisor_Competente', 'Totale', 'Verde', 'Recuperata', 'Rosso', '% SLA OK']
-            pivot_adv = pivot_adv[[c for c in col_order if c in pivot_adv.columns]]
-            
-            st.dataframe(pivot_adv.style.format({'% SLA OK': '{:.1f}%'}), use_container_width=True)
-            
-            st.write("**📋 Registro Dettagliato delle Interazioni (Filtri Applicati)**")
-            df_audit = df_filtrato.copy()
-            df_audit['Data Chiamata'] = df_audit['datetime'].dt.date
-            df_audit['Orario Esatto'] = df_audit['datetime'].dt.strftime('%H:%M:%S')
-            
-            tabella_operativa = df_audit[[
-                'Data Chiamata', 'Fascia_Oraria', 'Orario Esatto', 
-                'customer_number', 'SLA', 'Advisor_Competente'
-            ]].rename(columns={
-                'Fascia_Oraria': 'Fascia Turno',
-                'customer_number': 'Numero Cliente',
-                'SLA': 'Esito SLA Chiamata',
-                'Advisor_Competente': 'Advisor Competente (Gestione)'
-            }).sort_values(by=['Data Chiamata', 'Orario Esatto'])
-            
-            st.dataframe(tabella_operativa, use_container_width=True)
-            
-        else:
-            st.warning("Nessun dato corrispondente ai filtri selezionati.")
-
-    # --- TAB 3: GHOST CALLS ---
-    with tab3:
-        st.subheader("Analisi Ghost Calls (Escluse dallo SLA)")
-        tot_ghosts = len(df_ghosts)
-        tot_inbound_grezze = len(df_merged) + tot_ghosts
-        incidenza_ghost = (tot_ghosts / tot_inbound_grezze * 100) if tot_inbound_grezze > 0 else 0
-        
-        col_g1, col_g2 = st.columns(2)
-        col_g1.metric("Ghost Calls Totali", tot_ghosts)
-        col_g2.metric("Incidenza su Totale Inbound", f"{incidenza_ghost:.1f}%")
-        
-        if tot_ghosts > 0:
-            df_ghosts['Ora'] = df_ghosts['datetime'].dt.hour
-            df_ghosts['Giorno_F'] = df_ghosts['datetime'].dt.date
-            
-            col_ch1, col_ch2 = st.columns(2)
-            with col_ch1:
-                st.write("**Ghost Calls per Giorno**")
-                ghost_giorno = df_ghosts.groupby('Giorno_F').size().reset_index(name='Volume')
-                st.dataframe(ghost_giorno.set_index('Giorno_F'), use_container_width=True)
-            with col_ch2:
-                st.write("**Distribuzione Oraria**")
-                ghost_ora = df_ghosts.groupby('Ora').size().reset_index(name='Volume')
-                ore_complete = pd.DataFrame({'Ora': range(0, 24)})
-                ghost_ora_completo = pd.merge(ore_complete, ghost_ora, on='Ora', how='left').fillna(0)
-                st.bar_chart(ghost_ora_completo.set_index('Ora')['Volume'])
-                
-            st.write("**Registro Ispezione Analitico Ghost Calls**")
-            cols_to_show = ['datetime', 'customer_number', 'waiting_seconds', 'missed_call_reason']
-            cols_available = [c for c in cols_to_show if c in df_ghosts.columns]
-            
-            st.dataframe(
-                df_ghosts[cols_available].rename(
-                    columns={'datetime': 'Data/Ora', 'customer_number': 'Num. Cliente', 'waiting_seconds': 'Attesa (s)', 'missed_call_reason': 'Ragione'}
-                ), 
-                use_container_width=True
-            )
-        else:
-            st.success("Nessuna Ghost Call individuata nel periodo selezionato.")
-
-else:
-    st.info("ℹ️ Carica il file di esportazione delle chiamate di Aircall per sbloccare i pannelli di analisi.")
+        start_date, end_
