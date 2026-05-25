@@ -7,7 +7,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v6", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v6.1", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
@@ -238,13 +238,12 @@ if uploaded_file is not None:
         
         if not df_rossi.empty:
             heatmap_data = df_rossi.pivot_table(
-                index='Fascia_Oraria',       # ORA LE RIGHE SONO LE FASCE ORARIE
-                columns='Giorno_Settimana',  # ORA LE COLONNE SONO I GIORNI
+                index='Fascia_Oraria',       
+                columns='Giorno_Settimana',  
                 aggfunc='size', 
                 fill_value=0
             )
             ordine_giorni = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
-            # Riordiniamo la visualizzazione specificando che stiamo operando sulle colonne (axis=1)
             heatmap_data = heatmap_data.reindex(columns=ordine_giorni).dropna(how='all', axis=1)
             
             st.dataframe(
@@ -269,7 +268,11 @@ if uploaded_file is not None:
                 SLA_Rosso=('SLA', lambda x: (x == 'Rosso').sum())
             ).reset_index()
             
-            scorecard['% SLA OK'] = ((scorecard['Dirette_Verde'] + scorecard['Recuperate']) / scorecard['Totale_Inbound'] * 100).fillna(0)
+            # PROTEZIONE PyArrow per il calcolo della Scorecard
+            verde = scorecard['Dirette_Verde'].astype(float)
+            recup = scorecard['Recuperate'].astype(float)
+            totale = scorecard['Totale_Inbound'].astype(float)
+            scorecard['% SLA OK'] = ((verde + recup) / totale.replace(0, np.nan) * 100).fillna(0)
             
             st.dataframe(
                 scorecard.style
@@ -319,7 +322,12 @@ if uploaded_file is not None:
                 if c not in pivot_adv.columns: pivot_adv[c] = 0
                 
             pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Recuperata'] + pivot_adv['Rosso']
-            pivot_adv['% SLA OK'] = ((pivot_adv['Verde'] + pivot_adv['Recuperata']) / pivot_adv['Totale'] * 100).fillna(0)
+            
+            # PROTEZIONE PyArrow per il calcolo della Pivot Advisor
+            p_verde = pivot_adv['Verde'].astype(float)
+            p_recup = pivot_adv['Recuperata'].astype(float)
+            p_totale = pivot_adv['Totale'].astype(float)
+            pivot_adv['% SLA OK'] = ((p_verde + p_recup) / p_totale.replace(0, np.nan) * 100).fillna(0)
             
             col_order = ['Fascia_Oraria', 'Advisor_Competente', 'Totale', 'Verde', 'Recuperata', 'Rosso', '% SLA OK']
             pivot_adv = pivot_adv[[c for c in col_order if c in pivot_adv.columns]]
