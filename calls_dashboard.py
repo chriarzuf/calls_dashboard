@@ -7,7 +7,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 # ==========================================
 # CONFIGURAZIONE PAGINA
 # ==========================================
-st.set_page_config(page_title="Dashboard SLA Aircall v6.8", layout="wide")
+st.set_page_config(page_title="Dashboard SLA Aircall v7.0", layout="wide")
 st.title("📊 Dashboard Analisi SLA Inbound - Aircall")
 
 # ==========================================
@@ -19,7 +19,7 @@ festivi_italiani = list(festivi_it.keys())
 it_bday = CustomBusinessDay(holidays=festivi_italiani)
 
 # ==========================================
-# FUNZIONI DI SUPPORTO PER GLI ORARI
+# FUNZIONI DI SUPPORTO
 # ==========================================
 def parse_time_to_float(time_str):
     time_str = str(time_str).strip()
@@ -32,6 +32,36 @@ def format_float_to_time(time_float):
     h = int(time_float)
     m = int(round((time_float - h) * 60))
     return f"{h:02d}:{m:02d}"
+
+# --- NUOVA LOGICA: CALCOLO SCADENZA (CONGELAMENTO TIMER) ---
+def calculate_deadline(call_time):
+    is_weekend = call_time.weekday() >= 5
+    is_holiday = call_time.date() in festivi_italiani
+    is_business_day = not is_weekend and not is_holiday
+    
+    start_hour, end_hour = 9, 18
+    
+    if is_business_day and (start_hour <= call_time.hour < end_hour):
+        # Siamo in pieno orario lavorativo
+        end_of_day = call_time.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+        seconds_left_today = (end_of_day - call_time).total_seconds()
+        
+        if seconds_left_today >= 3600:
+            # C'è almeno 1 ora intera prima di staccare
+            return call_time + pd.Timedelta(hours=1)
+        else:
+            # Manca meno di un'ora: congeliamo il resto e lo spostiamo al mattino dopo!
+            leftover_seconds = 3600 - seconds_left_today
+            next_bday = pd.Timestamp(call_time.date()) + it_bday
+            return next_bday.replace(hour=start_hour, minute=0, second=0) + pd.Timedelta(seconds=leftover_seconds)
+    else:
+        # Fuori orario: timer standard, scadenza alle 10:00 del primo giorno utile
+        if not is_business_day or call_time.hour >= end_hour:
+            next_bday = pd.Timestamp(call_time.date()) + it_bday
+        else:
+            next_bday = pd.Timestamp(call_time.date())
+            
+        return next_bday.replace(hour=start_hour+1, minute=0, second=0)
 
 # ==========================================
 # 1. SIDEBAR: IMPOSTAZIONI E CARICAMENTO
@@ -64,24 +94,40 @@ def load_and_process_data(file):
     df['datetime'] = pd.to_datetime(df['datetime (tz offset incl.)'], dayfirst=True)
     df['waiting_seconds'] = pd.to_timedelta(df['waiting time']).dt.total_seconds().fillna(0)
     
-    # -------------------------------------------------------------------------
-    # FIX NUMERI DI TELEFONO: Usiamo la colonna nativa testuale "customer number"
-    # per aggirare il problema di Excel che converte "from" e "to" in esponenziali
-    # -------------------------------------------------------------------------
     if 'customer number' in df.columns:
         df['customer_number'] = df['customer number']
     else:
-        # Fallback di emergenza
         df['customer_number'] = np.where(df['direction'] == 'inbound', df['from'], df['to'])
         
     df['customer_number'] = df['customer_number'].replace([np.nan, 'nan', ''], 'Sconosciuto').fillna('Sconosciuto')
     
+    # 1. Isoliamo le Ghost Calls e le escludiamo dai calcoli
     is_ghost = (df['direction'] == 'inbound') & (df['answered'] == 'No') & (
         (df['waiting_seconds'] <= 5) | (df['missed_call_reason'] == 'short_abandoned')
     )
-    
     ghosts_df = df[is_ghost].copy()
     inbound_df = df[(df['direction'] == 'inbound') & (~is_ghost)].copy()
+    
+    # 2. FIX ANTI-BOMBARDAMENTO: Deduplicazione chiamate dello stesso cliente entro 10 minuti
+    inbound_df.sort_values(['customer_number', 'datetime'], inplace=True)
+    to_keep = []
+    last_times = {}
+    
+    for row in inbound_df.itertuples():
+        cust = row.customer_number
+        dt = row.datetime
+        
+        if cust in last_times:
+            if (dt - last_times[cust]).total_seconds() <= 600: # 600 secondi = 10 minuti
+                to_keep.append(False) # Chiamata assorbita
+            else:
+                last_times[cust] = dt
+                to_keep.append(True)
+        else:
+            last_times[cust] = dt
+            to_keep.append(True)
+            
+    inbound_df = inbound_df[to_keep].copy()
     
     valid_contacts = df[
         (df['direction'] == 'outbound') | 
@@ -118,23 +164,10 @@ def applica_regole_sla(row):
     call_time = row['datetime']
     resolve_time = row['datetime_risoluzione']
     
-    is_weekend = call_time.weekday() >= 5
-    is_holiday = call_time.date() in festivi_italiani
-    is_business_day = not is_weekend and not is_holiday
-    is_business_hours = 9 <= call_time.hour < 18
+    # Calcolo intelligente della scadenza usando la nuova funzione (Congelamento Timer)
+    deadline = calculate_deadline(call_time)
     
-    if is_business_day and is_business_hours:
-        delta_seconds = (resolve_time - call_time).total_seconds()
-        esito = 'Recuperata' if delta_seconds <= 3600 else 'Rosso'
-    else:
-        if not is_business_day or call_time.hour >= 18:
-            next_bday = pd.Timestamp(call_time.date()) + it_bday
-        else: 
-            next_bday = pd.Timestamp(call_time.date())
-            
-        deadline = next_bday.replace(hour=10, minute=0, second=0)
-        esito = 'Recuperata' if resolve_time <= deadline else 'Rosso'
-        
+    esito = 'Recuperata' if resolve_time <= deadline else 'Rosso'
     advisor_assegnato = row['advisor_risoluzione'] if esito == 'Recuperata' else 'In Ritardo'
     return esito, advisor_assegnato
 
@@ -336,12 +369,9 @@ if uploaded_file is not None:
                 
             pivot_adv['Totale'] = pivot_adv['Verde'] + pivot_adv['Recuperata'] + pivot_adv['Rosso']
             
-            # Rimosso il calcolo di % SLA OK
-            
             col_order = ['Fascia_Oraria', 'Advisor_Competente', 'Totale', 'Verde', 'Recuperata', 'Rosso']
             pivot_adv = pivot_adv[[c for c in col_order if c in pivot_adv.columns]]
             
-            # Visualizzazione standard senza la formattazione percentuale
             st.dataframe(pivot_adv, use_container_width=True)
             
             st.write("**📋 Registro Dettagliato delle Interazioni (Filtri Applicati)**")
